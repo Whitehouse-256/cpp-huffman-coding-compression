@@ -1,6 +1,8 @@
 #include <fstream>
 #include <string>
 #include <cstring>
+#include <cstdint>
+#include <string.h>
 #include <map>
 #include <iostream>
 #include <iomanip>
@@ -15,14 +17,19 @@ void binDump(unsigned char i){
   std::cout << std::endl;
 }
 
+bool comparePair(const std::pair<char,int>& o1, const std::pair<char,int>& o2){
+  return (o1.second > o2.second);
+}
+
+
 class BitSymbol{
   private:
     unsigned char length = 0;
-    unsigned long data = 0;
+    uint64_t data = 0;
     unsigned char iteratorPtr = 0;
   public:
     void add(bool bit){
-      data |= (bit ? (0x01 << (63-length) ) : 0);
+      data |= (bit ? (uint64_t(1) << (63-length) ) : 0);
       length++;
     }
     void resetIterator(){
@@ -32,12 +39,12 @@ class BitSymbol{
       return iteratorPtr < length;
     }
     bool getNext(){
-      return data & (0x01 << (63 - (iteratorPtr++) ));
+      return data & (uint64_t(1) << (63 - (iteratorPtr++) ));
     }
     std::string getAsString() const {
       std::string ret;
       for(unsigned char i=0; i<length; i++){
-        ret += (data & (0x01 << (63 - i)) ? "1" : "0");
+        ret += (data & (uint64_t(1) << (63 - i)) ? "1" : "0");
       }
       return ret;
     }
@@ -45,9 +52,9 @@ class BitSymbol{
       return length;
     }
     bool equalsN(const BitSymbol &other, unsigned char n){
-      unsigned long mask = 0;
+      uint64_t mask = 0;
       for(unsigned char i=0; i<n; i++){
-        mask |= (0x01 << (63 - i));
+        mask |= (uint64_t(1) << (63 - i));
       }
       return (this->data & mask) == (other.data & mask);
     }
@@ -59,7 +66,7 @@ class BitSymbol{
     }
     bool getLSB(){
       if(length==0) return false;
-      return data & (0x01 << (64-length) );
+      return data & (uint64_t(1) << (64-length) );
     }
 };
 
@@ -221,7 +228,7 @@ class Huffman{
         //BitSymbol bs;
         //bitSymbols.push_back(bs);
       }
-      std::sort(symbolsSort.begin(), symbolsSort.end(), [](const auto& o1, const auto& o2){return (o1.second > o2.second);});
+      std::sort(symbolsSort.begin(), symbolsSort.end(), comparePair);
 
       //sorted, now generate symbols
       std::map<BitSymbol,char> symbolSubstMap = Huffman::generateSymbols(symbolsSort);
@@ -232,16 +239,16 @@ class Huffman{
       //we have all symbols generated
 
       BitStream bitStream;
-      unsigned long progress = 0;
+      uint64_t progress = 0;
       std::cout << "Progress:" << std::endl;
       for(std::string::iterator it=in.begin(); it!=in.end(); ++it){
         //foreach char
         char c = *it;
         progress++;
         if(progress % 300 == 0){
-          unsigned long percentage = 10000L * progress / inLength;
-          unsigned long percentageInt = percentage / 100;
-          unsigned long percentageSub = percentage % 100;
+          uint64_t percentage = uint64_t(10000) * progress / inLength;
+          uint64_t percentageInt = percentage / 100;
+          uint64_t percentageSub = percentage % 100;
           std::cout << "\r " << std::dec << percentageInt << "." << (percentageSub < 10 ? "0" : "") << percentageSub << "% ";
         }
         bool substFound = false;
@@ -284,9 +291,9 @@ class Huffman{
       while(true){
         progress++;
         if(progress % 300 == 0){
-          unsigned long percentage = 10000L * stringPos / encLength;
-          unsigned long percentageInt = percentage / 100;
-          unsigned long percentageSub = percentage % 100;
+          uint64_t percentage = uint64_t(10000) * stringPos / encLength;
+          uint64_t percentageInt = percentage / 100;
+          uint64_t percentageSub = percentage % 100;
           std::cout << "\r " << std::dec << percentageInt << "." << (percentageSub < 10 ? "0" : "") << percentageSub << "% ";
         }
         bool foundSymbol = false;

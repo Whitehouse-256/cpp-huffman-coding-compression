@@ -76,6 +76,13 @@ class BitStream{
     unsigned char tmp = 0;
     char ptr = 0;
   public:
+    static BitStream createFromString(const std::string& str, unsigned int startIndex=0){
+      BitStream bs;
+      for(unsigned int i=startIndex; i<str.length(); i++){
+        bs.bytes.push_back(str[i]);
+      }
+      return bs;
+    }
     void add(bool symbol){
       tmp |= (symbol ? (0x01 << (7-ptr) ) : 0);
       ptr++;
@@ -84,6 +91,9 @@ class BitStream{
         bytes.push_back(tmp);
         tmp = 0;
       }
+    }
+    void addByte(unsigned char add){
+      this->bytes.push_back(add);
     }
     void finalize(){
       while(ptr > 0) this->add(1);
@@ -116,6 +126,12 @@ class BitStream{
         }
       }
       return bs;
+    }
+    bool getSubBit(unsigned int index){
+      unsigned int byteNum = index/8;
+      unsigned int bitNum = index%8;
+      if(byteNum >= this->bytes.size()) return false;
+      return this->bytes[byteNum] & ( 0x01 << (7-bitNum) );
     }
 };
 
@@ -319,8 +335,81 @@ class Huffman{
       }
       return dec;
     }
-};
 
+    static std::string serialize(BitStream bitStream, std::map<BitSymbol,char> symbolSubstMap){
+      std::string ret = "";
+      ret += ((unsigned char)0xAD); //header part 1
+      ret += ((unsigned char)0xBD); //header part 2
+      ret += ((unsigned char)0x01); //version 1
+      ret += ((unsigned char)(symbolSubstMap.size())); //number of substitution symbol
+      //table of subst symbols
+      BitStream symbolMapStream;
+      for(std::pair<BitSymbol,char> p : symbolSubstMap){
+        //char (8b), symbolSize (6b), symbol (Xb)
+        for(int i=0; i<8; i++)
+          symbolMapStream.add(p.second & (0x01 << (7-i) ));
+        unsigned char symbolSize = p.first.getLength();
+        for(int i=2; i<8; i++)
+          symbolMapStream.add(symbolSize & (0x01 << (7-i) ));
+        p.first.resetIterator();
+        while(p.first.hasNext())
+          symbolMapStream.add(p.first.getNext());
+      }
+      symbolMapStream.finalize();
+      const std::vector<unsigned char> &symbols =  symbolMapStream.getData();
+      for(const unsigned char &c : symbols){
+        ret += c;
+      }
+      //raw compressed data
+      //maybe 8 B of compressed data length
+      bitStream.finalize(); //just to be sure
+      const std::vector<unsigned char> &symbolCharacters =  bitStream.getData();
+      for(const unsigned char &c : symbolCharacters){
+        ret += c;
+      }
+      return ret;
+    }
+
+    static std::pair<BitStream,std::map<BitSymbol,char>> deserialize(const std::string& serial){
+      if(serial.length() < 4) return std::make_pair<BitStream,std::map<BitSymbol,char>>(BitStream(),std::map<BitSymbol,char>()); //invalid header
+      if(((unsigned char)serial[0]) != 0xAD || ((unsigned char)serial[1]) != 0xBD) return std::make_pair<BitStream,std::map<BitSymbol,char>>(BitStream(),std::map<BitSymbol,char>()); //invalid format
+      if(serial[2] != 0x01) return std::make_pair<BitStream,std::map<BitSymbol,char>>(BitStream(),std::map<BitSymbol,char>()); //not supported format version
+      // /\ these will be exceptions
+      unsigned char symbolSubstMapSize = (unsigned char)serial[3];
+      std::map<BitSymbol,char> symbolSubstMap;
+      BitStream bitStream = BitStream::createFromString(serial, 4);
+      unsigned int bitCount = 0;
+      //parse symbol substitution map
+      for(unsigned char i=0; i<symbolSubstMapSize; i++){
+        //char (8b), symbolSize (6b), symbol (Xb)
+        char c = 0;
+        for(int j=0; j<8; j++){
+          c |= (bitStream.getSubBit(bitCount++) ? (0x01 << (7-j) ) : 0);
+        }
+        unsigned char symbolSize = 0;
+        for(int j=0; j<6; j++){
+          bool got = bitStream.getSubBit(bitCount++);
+          symbolSize |= (got ? (0x01 << (5-j) ) : 0);
+        }
+        if(symbolSize == 0) symbolSize = 64;
+        BitSymbol bitSymbol;
+        for(unsigned char j=0; j<symbolSize; j++){
+          bitSymbol.add(bitStream.getSubBit(bitCount++));
+        }
+        symbolSubstMap[bitSymbol] = c;
+        std::cout << "D" << std::dec << std::setw(2) << (unsigned int)i << " subst: " << bitSymbol.getAsString() << " ~> '" << c << "'" << std::endl;
+      }
+      //discard padding to next byte
+      while(bitCount % 8 != 0) bitCount++;
+      //copy data
+      BitStream dataBitStream;
+      unsigned int dataStart = 4 + bitCount/8;
+      for(unsigned int i=dataStart; i<serial.length(); i++){
+        dataBitStream.addByte(serial[i]);
+      }
+      return std::make_pair(dataBitStream, symbolSubstMap);
+    }
+};
 
 
 class File{
@@ -388,9 +477,15 @@ int main(int argc, char** argv){
     std::pair<BitStream,std::map<BitSymbol,char>> out = Huffman::strEncode(in);
 
     //TESTING
+    std::string serial = Huffman::serialize(out.first, out.second);
+    std::cout << "serial length=" << serial.length() << " B" << std::endl;
+    std::pair<BitStream,std::map<BitSymbol,char>> unserial = Huffman::deserialize(serial);
+    std::cout << "unserial size=" << unserial.first.getLength() << " b; " << unserial.second.size() << " size" << std::endl;
+
     std::cout << "Trying to decode!" << std::endl;
     std::string dec = Huffman::decode(out.first, out.second);
-    std::cout << dec;
+    std::string dec2 = Huffman::decode(unserial.first, unserial.second);
+    //std::cout << dec;
 
     //writing output file
     std::cout << "1f: " << filenameOut << std::endl;
@@ -398,8 +493,12 @@ int main(int argc, char** argv){
     fileOut.write(out.first.getAsString());
 
     std::string filenameOutDec = filenameOut+".dec";
+    std::string filenameOutDec2 = filenameOut+".dec2";
     std::cout << "2f: " << filenameOutDec << " = " << filenameOutDec.c_str() << std::endl;
+    std::cout << "3f: " << filenameOutDec2 << " = " << filenameOutDec2.c_str() << std::endl;
     File fileOut2(filenameOutDec.c_str());
     fileOut2.write(dec);
+    File fileOut3(filenameOutDec2.c_str());
+    fileOut3.write(dec2);
     return 0;
 }

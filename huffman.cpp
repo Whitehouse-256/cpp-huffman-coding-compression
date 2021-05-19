@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string.h>
 #include <map>
+#include <unordered_map>
 #include <iostream>
 #include <iomanip>
 #include <utility>
@@ -21,6 +22,50 @@ bool comparePair(const std::pair<char,int>& o1, const std::pair<char,int>& o2){
   return (o1.second > o2.second);
 }
 
+
+struct CLIOptions{
+  int state = 0;
+  bool extract = false; // -x
+  std::string archiveName; // -f archive.whz
+  std::string fileName; // file.txt
+  // ./Huffman -f archive.whz file.txt
+  // ./Huffman file.txt   (-> file.txt.whz)
+  // ./Huffman -xf archive.whz
+  void parseArgs(int argc, char** argv){
+    for(int i=1; i<argc; i++){
+      char* currentWord = argv[i];
+      if(this->state == 0){
+        if(currentWord[0] == '-'){
+          //parse flags
+          currentWord++;
+          while(*currentWord != '\0'){
+            if(*currentWord == 'x'){
+              this->extract = true;
+            }else if(*currentWord == 'f'){
+              this->state = 1; //next word is archiveName
+            }else if(*currentWord == 'h'){
+              CLIOptions::printHelpAndExit(argc, argv);
+            }else{
+              std::cerr << "Unknown parameter '-" << *currentWord << "'!" << std::endl;
+              exit(1);
+            }
+            currentWord++;
+          }
+        }else{
+            //parse fileName
+            this->fileName = std::string(currentWord);
+        }
+      }else if(this->state == 1){
+        this->archiveName = std::string(currentWord);
+        this->state = 0;
+      }
+    }
+  }
+  static void printHelpAndExit(int argc, char** argv){
+    std::cout << "Usage: " << argv[0] << " [-x] [-f archiveName] fileName" << std::endl;
+    exit(0);
+  }
+};
 
 class BitSymbol{
   private:
@@ -298,7 +343,7 @@ class Huffman{
       return std::make_pair(bitStream, symbolSubstMap);
     }
 
-    static std::string decode(BitStream enc, std::map<BitSymbol,char> symbolSubstMap){
+    static std::string strDecode(BitStream enc, std::map<BitSymbol,char> symbolSubstMap){
       unsigned int stringPos = 0;
       unsigned int encLength = enc.getLength();
       unsigned int progress = 0;
@@ -375,12 +420,19 @@ class Huffman{
       if(((unsigned char)serial[0]) != 0xAD || ((unsigned char)serial[1]) != 0xBD) return std::make_pair<BitStream,std::map<BitSymbol,char>>(BitStream(),std::map<BitSymbol,char>()); //invalid format
       if(serial[2] != 0x01) return std::make_pair<BitStream,std::map<BitSymbol,char>>(BitStream(),std::map<BitSymbol,char>()); //not supported format version
       // /\ these will be exceptions
-      unsigned char symbolSubstMapSize = (unsigned char)serial[3];
+      
+      for(int i=0; i<16; i++){
+        std::cout << std::hex << ((unsigned int)serial[i]) << " ";
+      }
+      std::cout << std::endl;
+      
+      unsigned int symbolSubstMapSize = (unsigned char)serial[3]; // 0 means 256
+      if(symbolSubstMapSize == 0) symbolSubstMapSize = 256;
       std::map<BitSymbol,char> symbolSubstMap;
       BitStream bitStream = BitStream::createFromString(serial, 4);
       unsigned int bitCount = 0;
       //parse symbol substitution map
-      for(unsigned char i=0; i<symbolSubstMapSize; i++){
+      for(unsigned int i=0; i<symbolSubstMapSize; i++){
         //char (8b), symbolSize (6b), symbol (Xb)
         char c = 0;
         for(int j=0; j<8; j++){
@@ -420,18 +472,12 @@ class File{
       this->filename = f;
     }
     string read(){
-      string c = "";
-      string s;
+      string c;
       fstream fs;
       fs.exceptions(std::ifstream::failbit | std::ifstream::badbit);
       try{
-        fs.open(this->filename, ios_base::in);
-        while(getline(fs, s)){
-          c += s+"\n";
-        }
-        if(c.length()){
-          c.pop_back();
-        }
+        fs.open(this->filename, ios_base::in | ios_base::binary);
+        c = std::string(std::istreambuf_iterator<char>(fs), {});
         fs.close();
       }catch(const std::fstream::failure &e){
         std::cerr<<"Error in read: "<<e.what()<<std::endl;
@@ -439,11 +485,34 @@ class File{
       }
       return c;
     }
+    string OLD_read(){
+      string c = "";
+      string s;
+      fstream fs;
+      fs.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+      try{
+        fs.open(this->filename, ios_base::in);
+        std::cout << "Reading file of: " << fs.gcount() << ", " << fs.tellg() << " bytes." << std::endl;
+        while(getline(fs, s)){
+          c += s+"\n";
+        }
+        std::cout << "Read1 file of: " << fs.gcount() << ", " << fs.tellg() << " bytes." << std::endl;
+        fs.close();
+      }catch(const std::fstream::failure &e){
+        std::cout << "Read2 file of: " << fs.gcount() << " bytes." << std::endl;
+        std::cerr<<"Error in read: "<<e.what()<<std::endl;
+        cerr << "Error: " << strerror(errno) << std::endl;
+      }
+      if(c.length()){
+        c.pop_back();
+      }
+      return c;
+    }
     bool write(const string& w){
       fstream fs;
       fs.exceptions(std::ifstream::failbit | std::ifstream::badbit);
       try{
-        fs.open(this->filename , ios::trunc|ios::out);
+        fs.open(this->filename , ios::trunc | ios::out | ios_base::binary);
         fs<<w;
         fs.close();
       }catch(const std::fstream::failure &e){
@@ -455,50 +524,61 @@ class File{
     }
     void append(const string& w) {
       fstream fs;
-      fs.open(this->filename, ios::out | ios::app);
+      fs.open(this->filename, ios::out | ios::app | ios_base::binary);
       fs<<w;
       fs.close();
     }
 };
 
 int main(int argc, char** argv){
-    if(argc != 3){
-        std::cout << "Usage: " << argv[0] << " file_in file_out" << std::endl;
-        return 0;
+    CLIOptions options;
+    options.parseArgs(argc, argv);
+    if(options.extract && options.archiveName.length() == 0){
+        CLIOptions::printHelpAndExit(argc, argv);
     }
-    std::string filenameIn = std::string(argv[1]);
-    std::string filenameOut = std::string(argv[2]);
-    std::cout << "Encoding file " << filenameIn << " outputing to file " << filenameOut << std::endl;
-
-    //read file
-    File fileIn(filenameIn.c_str());
-    std::string in = fileIn.read();
-    //encrypt - different section
-    std::pair<BitStream,std::map<BitSymbol,char>> out = Huffman::strEncode(in);
-
-    //TESTING
-    std::string serial = Huffman::serialize(out.first, out.second);
-    std::cout << "serial length=" << serial.length() << " B" << std::endl;
-    std::pair<BitStream,std::map<BitSymbol,char>> unserial = Huffman::deserialize(serial);
-    std::cout << "unserial size=" << unserial.first.getLength() << " b; " << unserial.second.size() << " size" << std::endl;
-
-    std::cout << "Trying to decode!" << std::endl;
-    std::string dec = Huffman::decode(out.first, out.second);
-    std::string dec2 = Huffman::decode(unserial.first, unserial.second);
-    //std::cout << dec;
-
-    //writing output file
-    std::cout << "1f: " << filenameOut << std::endl;
-    File fileOut(filenameOut.c_str());
-    fileOut.write(out.first.getAsString());
-
-    std::string filenameOutDec = filenameOut+".dec";
-    std::string filenameOutDec2 = filenameOut+".dec2";
-    std::cout << "2f: " << filenameOutDec << " = " << filenameOutDec.c_str() << std::endl;
-    std::cout << "3f: " << filenameOutDec2 << " = " << filenameOutDec2.c_str() << std::endl;
-    File fileOut2(filenameOutDec.c_str());
-    fileOut2.write(dec);
-    File fileOut3(filenameOutDec2.c_str());
-    fileOut3.write(dec2);
+    if(options.extract && options.fileName.length() != 0){
+        CLIOptions::printHelpAndExit(argc, argv);
+    }
+    if(!options.extract && options.fileName.length() == 0){
+        CLIOptions::printHelpAndExit(argc, argv);
+    }
+    if(!options.extract && options.archiveName.length() == 0){
+        options.archiveName = options.fileName + std::string(".whz");
+    }
+    
+    if(options.extract){
+        std::cout << "Going to extract archive '" << options.archiveName << "'!" << std::endl;
+        //read file
+        File inputFile(options.archiveName.c_str());
+        std::string inputString = inputFile.read();
+        std::cout << "DEBUG, inputString length = " << inputString.length() << std::endl;
+        //decompress
+        std::pair<BitStream,std::map<BitSymbol,char>> dataPair = Huffman::deserialize(inputString);
+        std::string outString = Huffman::strDecode(dataPair.first, dataPair.second);
+        //write file
+        std::string outputFileName = options.archiveName;
+        if(outputFileName.length() > 4 && outputFileName.substr(outputFileName.length()-4, 4) == ".whz"){
+            outputFileName = outputFileName.substr(0, outputFileName.length()-4);
+        }else{
+            outputFileName += ".dec";
+        }
+        std::cout << "Writing into file '" << outputFileName << "'!" << std::endl;
+        File outputFile(outputFileName.c_str());
+        outputFile.write(outString);
+        exit(0);
+    }else{
+        std::cout << "Going to create archive '" << options.archiveName << "' from file '" << options.fileName << "'!" << std::endl;
+        //read file
+        File inputFile(options.fileName.c_str());
+        std::string inputString = inputFile.read();
+        //compress
+        std::pair<BitStream,std::map<BitSymbol,char>> out = Huffman::strEncode(inputString);
+        std::string outString = Huffman::serialize(out.first, out.second);
+        //write file
+        File outputFile(options.archiveName.c_str());
+        outputFile.write(outString);
+        exit(0);
+    }
+    
     return 0;
 }

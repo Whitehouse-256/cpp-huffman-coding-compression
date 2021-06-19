@@ -348,6 +348,14 @@ class Huffman{
       unsigned int encLength = enc.getLength();
       unsigned int progress = 0;
       std::string dec = "";
+      //faster lookup table
+      std::vector<BitSymbol> substKeys;
+      std::vector<char> substValues;
+      for(const std::pair<BitSymbol,char> &p : symbolSubstMap){
+        substKeys.push_back(p.first);
+        substValues.push_back(p.second);
+      }
+      unsigned int substMapSize = substKeys.size();
       std::cout << "Progress:" << std::endl;
       while(true){
         progress++;
@@ -358,7 +366,18 @@ class Huffman{
           std::cout << "\r " << std::dec << percentageInt << "." << (percentageSub < 10 ? "0" : "") << percentageSub << "% ";
         }
         bool foundSymbol = false;
-        for(const std::pair<BitSymbol,char> &p : symbolSubstMap){
+        for(unsigned int i=0; i<substMapSize; i++){
+          unsigned int symbolLen = (unsigned int) substKeys[i].getLength();
+          BitSymbol symbol = enc.getSubBits(stringPos, symbolLen);
+          if(substKeys[i] == symbol){ //symbol found
+            dec += substValues[i];
+            stringPos += symbolLen;
+            //std::cout << "Matched char '" << substValues[i] << "'!" << std::endl;
+            foundSymbol = true;
+            break;
+          }
+        }
+        /*for(const std::pair<BitSymbol,char> &p : symbolSubstMap){
           unsigned int symbolLen = (unsigned int) p.first.getLength();
           BitSymbol symbol = enc.getSubBits(stringPos, symbolLen);
           if(p.first == symbol){ //symbol found
@@ -368,7 +387,7 @@ class Huffman{
             foundSymbol = true;
             break;
           }
-        }
+        }*/
         if(!foundSymbol){
           std::cout << "Symbol not matched! stringPos=" << stringPos << std::endl;
           break;
@@ -482,29 +501,6 @@ class File{
       }catch(const std::fstream::failure &e){
         std::cerr<<"Error in read: "<<e.what()<<std::endl;
         cerr << "Error: " << strerror(errno) << std::endl;
-      }
-      return c;
-    }
-    string OLD_read(){
-      string c = "";
-      string s;
-      fstream fs;
-      fs.exceptions(std::ifstream::failbit | std::ifstream::badbit);
-      try{
-        fs.open(this->filename, ios_base::in);
-        std::cout << "Reading file of: " << fs.gcount() << ", " << fs.tellg() << " bytes." << std::endl;
-        while(getline(fs, s)){
-          c += s+"\n";
-        }
-        std::cout << "Read1 file of: " << fs.gcount() << ", " << fs.tellg() << " bytes." << std::endl;
-        fs.close();
-      }catch(const std::fstream::failure &e){
-        std::cout << "Read2 file of: " << fs.gcount() << " bytes." << std::endl;
-        std::cerr<<"Error in read: "<<e.what()<<std::endl;
-        cerr << "Error: " << strerror(errno) << std::endl;
-      }
-      if(c.length()){
-        c.pop_back();
       }
       return c;
     }
